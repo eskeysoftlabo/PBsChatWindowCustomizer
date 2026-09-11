@@ -114,6 +114,33 @@ beside the client's, nothing of theirs is wrapped.
 The preview is built entirely from controls of the add-on's own. Showing the real chat in the
 menu would mean calling its `Maximize` and fade animations from add-on code.
 
+## 6b. When the settings panel is actually open
+
+**Found on PS5 in 1.0.0, confirmed in the library's source** (`votan73/ESO`,
+`LibHarvensAddonSettings/Console/Settings.lua` and `Main.lua`). 1.0.0 showed the preview on
+`LibHarvensAddonSettings_AddonSelected`, and on console it never appeared until the preview
+checkbox was switched off and on again. The add-on list opens a panel in two steps:
+
+```lua
+addon:Select()                                      -- fires AddonSelected, then sets .selected
+SCENE_MANAGER:Push("LibHarvensAddonSettingsScene")  -- and only then shows the panel
+```
+
+So the callback arrives while the add-on *list* is still the current scene. The preview noted
+that scene, and hid itself a quarter of a second later when it saw the scene had changed to the
+panel. The checkbox worked because it runs inside the panel scene. And `Select()` returns early
+for the add-on already selected, so a second visit to the same panel fires no callback at all.
+
+From 1.0.1 the preview follows the library's own panel scene instead: shown with our panel
+`.selected` means up, hiding means down. The scene is created when the main menu first opens
+(`LibHarvensAddonSettings:Initialize`, from `MAIN_MENU_GAMEPAD_SCENE`), after every add-on has
+loaded, so it is looked up on the first `AddonSelected` -- which always comes before the first
+time the scene is shown -- and its `"StateChange"` registered then. The PC copy of the library
+has no such scene and shows panels in place, so there the callback still shows the preview at
+once.
+
+The test harness now opens panels in that same order, and fails on 1.0.0.
+
 ## 7. Cost on console
 
 Moving and resizing a control costs nothing lasting. A text size the client has not drawn
@@ -140,8 +167,9 @@ descriptor or nothing at all.
    way, with no jump at the first move.
 4. **Is the preview drawn above the settings panel?** It is `DL_OVERLAY` / `DT_HIGH`. If it is
    hidden behind the panel, that is the only thing to change.
-5. **Does the preview go away on its own?** Leave the panel with Back, and with the menu button
-   straight to the HUD. If it lingers, `LibHarvensAddonSettings` on console does not set
-   `.selected` and does not change scene between the list and a panel.
+5. **Does the preview come and go with the panel?** Open the panel (it must appear straight
+   away), back out to the list and open it again (it must appear again), open another add-on's
+   panel (it must not), and leave with the menu button straight to the HUD (it must go). See
+   §6b.
 6. **Does the text survive changing Small / Medium / Large?** Set a size here, change the game's
    setting, return to the HUD. The chat must come back at the add-on's size.

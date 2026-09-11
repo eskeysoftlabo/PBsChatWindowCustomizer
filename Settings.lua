@@ -71,13 +71,14 @@ function addon:InitSettings()
 	settings.author = self.author
 	settings.version = self.version
 
-	-- The preview follows the panel: up when this add-on's panel is picked, down when another's
-	-- is. Registered on the client's callback manager, beside everyone else's.
+	-- The preview follows the panel -- see "Following the settings panel" in Preview.lua for why
+	-- this callback alone is not enough on console. Registered on the client's callback manager,
+	-- beside everyone else's.
 	CALLBACK_MANAGER:RegisterCallback(
 		"LibHarvensAddonSettings_AddonSelected",
 		function(_, addonSettings)
 			if self.preview then
-				self.preview:SetPanelOpen(addonSettings == settings)
+				self.preview:OnAddonSelected(addonSettings)
 			end
 		end
 	)

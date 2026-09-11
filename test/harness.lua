@@ -28,7 +28,7 @@ function AdvanceFrame(ms) frameTime = frameTime + (ms or 1000) end
 function GetAddOnManager()
 	return {
 		GetNumAddOns = function() return 1 end,
-		GetAddOnInfo = function(_, i) return "PBsChatWindowCustomizer", "|cFF69B4PB\u{2019}s ChatWindowCustomizer|r 1.0.0" end,
+		GetAddOnInfo = function(_, i) return "PBsChatWindowCustomizer", "|cFF69B4PB\u{2019}s ChatWindowCustomizer|r 1.0.1" end,
 	}
 end
 
@@ -53,7 +53,8 @@ function Fire(event, ...) for _, fn in pairs(handlers[event] or {}) do fn(event,
 local callbacks = {}
 CALLBACK_MANAGER = {
 	RegisterCallback = function(_, name, fn) callbacks[name] = callbacks[name] or {}; table.insert(callbacks[name], fn) end,
-	FireCallbacks = function(_, name, ...) for _, fn in ipairs(callbacks[name] or {}) do fn(name, ...) end end,
+	-- Like ZO_CallbackObject: the callback gets the arguments, not the event name.
+	FireCallbacks = function(_, name, ...) for _, fn in ipairs(callbacks[name] or {}) do fn(...) end end,
 }
 
 -- ---- saved variables ----------------------------------------------------------------
@@ -256,18 +257,65 @@ function FireHud(state) for _, fn in ipairs(hudCallbacks) do fn(nil, state) end 
 CurrentScene = { name = "gamepad_settings" }
 SCENE_MANAGER = { GetCurrentScene = function() return CurrentScene end }
 
+SCENE_SHOWING, SCENE_SHOWN, SCENE_HIDING, SCENE_HIDDEN = "showing", "shown", "hiding", "hidden"
+local function MakeScene(name)
+	local scene = { name = name, state = SCENE_HIDDEN, callbacks = {} }
+	function scene:RegisterCallback(_, fn) table.insert(self.callbacks, fn) end
+	function scene:IsShowing() return self.state == SCENE_SHOWN end
+	function scene:SetState(state) self.state = state; for _, fn in ipairs(self.callbacks) do fn(nil, state) end end
+	return scene
+end
+MenuScene = CurrentScene
+
 -- ---- LibHarvensAddonSettings --------------------------------------------------------
+-- The console copy of the library, as far as selection goes (votan73/ESO,
+-- LibHarvensAddonSettings/Main.lua + Console/Settings.lua): the panel scene is only created the
+-- first time the main menu opens, and picking an add-on from the list calls Select() -- which
+-- fires AddonSelected, *then* sets .selected -- and only after that pushes the panel scene.
+-- Select() returns early for the add-on that is already selected.
 PanelRows = {}
+local panels = {}
 LibHarvensAddonSettings = {
 	ST_LABEL = "label", ST_SECTION = "section", ST_CHECKBOX = "checkbox", ST_SLIDER = "slider", ST_DROPDOWN = "dropdown", ST_BUTTON = "button",
 	AddAddon = function(_, title)
-		local panel = { title = title, updates = 0 }
-		function panel:AddSetting(row) PanelRows[#PanelRows + 1] = row end
+		local panel = { title = title, name = title, updates = 0, selected = false }
+		function panel:AddSetting(row) if self == Panel then PanelRows[#PanelRows + 1] = row end end
 		function panel:UpdateControls() self.updates = self.updates + 1 end
-		Panel = panel
+		function panel:Select()
+			if self.selected then return end
+			CALLBACK_MANAGER:FireCallbacks("LibHarvensAddonSettings_AddonSelected", self.name, self)
+			for _, other in ipairs(panels) do other.selected = false end
+			self.selected = true
+		end
+		table.insert(panels, panel)
+		if title:find("ChatWindowCustomizer", 1, true) then Panel = panel end
 		return panel
 	end,
 }
+function OpenMainMenu()
+	if not LibHarvensAddonSettings.scene then
+		LibHarvensAddonSettings.scene = MakeScene("LibHarvensAddonSettingsScene")
+	end
+	CurrentScene = MenuScene
+end
+
+-- activatedCallback in the library's add-on list.
+function OpenPanel(panel)
+	OpenMainMenu()
+	panel:Select()
+	local scene = LibHarvensAddonSettings.scene
+	scene:SetState(SCENE_SHOWING)
+	CurrentScene = scene
+	scene:SetState(SCENE_SHOWN)
+end
+
+-- Back out of a panel to the list.
+function ClosePanel()
+	local scene = LibHarvensAddonSettings.scene
+	scene:SetState(SCENE_HIDING)
+	CurrentScene = MenuScene
+	scene:SetState(SCENE_HIDDEN)
+end
 
 function Row(label)
 	for _, row in ipairs(PanelRows) do
@@ -282,3 +330,6 @@ dofile(DIR .. "/lang/jp.lua")
 dofile(DIR .. "/Main.lua")
 dofile(DIR .. "/Preview.lua")
 dofile(DIR .. "/Settings.lua")
+
+-- Another add-on's panel. Ours is added later, at our EVENT_ADD_ON_LOADED.
+OtherPanel = LibHarvensAddonSettings:AddAddon("Someone else's add-on")

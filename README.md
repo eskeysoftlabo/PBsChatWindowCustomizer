@@ -4,7 +4,7 @@ Moves and resizes the chat window on the HUD, and changes the size of the text i
 Elder Scrolls Online on console.
 
 - **Author:** PinkBanther
-- **Version:** 1.0.0
+- **Version:** 1.0.1
 - **Optional:** `LibHarvensAddonSettings` >= 20106 (for the settings panel; the chat commands
   work without it)
 

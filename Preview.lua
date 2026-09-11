@@ -253,6 +253,76 @@ function preview:StillWanted()
 	return true
 end
 
+-- ---------------------------------------------------------------------------------------
+-- Following the settings panel
+--
+-- On console the library opens a panel in two steps (LibHarvensAddonSettings, Console/
+-- Settings.lua, the add-on list's activatedCallback):
+--
+--   addon:Select()                                      fires AddonSelected, then sets .selected
+--   SCENE_MANAGER:Push("LibHarvensAddonSettingsScene")  and only then shows the panel
+--
+-- So AddonSelected arrives while the add-on list is still the current scene. A preview shown
+-- there notes the wrong scene and hides itself the moment the panel comes up. And Select()
+-- returns early for the add-on already selected, so a second visit to the same panel fires
+-- nothing at all. The panel scene itself is the reliable signal: shown with our panel selected
+-- means the preview is wanted, hiding means it is not.
+--
+-- The scene only exists once the library has initialised, which it does the first time the main
+-- menu opens -- after every add-on has loaded -- so it is looked up when a panel is picked, not
+-- at load. The first pick of any panel always comes before its scene is shown.
+-- ---------------------------------------------------------------------------------------
+
+local PANEL_SCENE_NAME = "LibHarvensAddonSettingsScene"
+
+function preview:PanelScene()
+	local library = LibHarvensAddonSettings
+	local scene = library and library.scene
+	if not scene and SCENE_MANAGER and type(SCENE_MANAGER.GetScene) == "function" then
+		scene = SCENE_MANAGER:GetScene(PANEL_SCENE_NAME)
+	end
+	if type(scene) == "table" and type(scene.RegisterCallback) == "function" then
+		return scene
+	end
+	return nil
+end
+
+-- Registered on the library's scene, beside the library's own callbacks. Once only.
+function preview:WatchPanelScene()
+	if self.panelScene then
+		return self.panelScene
+	end
+	local scene = self:PanelScene()
+	if not scene then
+		return nil
+	end
+	self.panelScene = scene
+	scene:RegisterCallback("StateChange", function(_, newState)
+		if newState == SCENE_SHOWN then
+			local panel = addon.settingsPanel
+			self:SetPanelOpen(panel ~= nil and panel.selected == true)
+		elseif newState == SCENE_HIDING then
+			self:SetPanelOpen(false)
+		end
+	end)
+	return scene
+end
+
+-- LibHarvensAddonSettings_AddonSelected. On console the panel scene is not up yet, and its
+-- SCENE_SHOWN does the showing; the PC copy of the library has no such scene and shows the panel
+-- in place, so there the preview goes up at once.
+function preview:OnAddonSelected(addonSettings)
+	local scene = self:WatchPanelScene()
+	if addonSettings ~= addon.settingsPanel then
+		self:SetPanelOpen(false)
+		return
+	end
+	if scene and not (type(scene.IsShowing) == "function" and scene:IsShowing()) then
+		return
+	end
+	self:SetPanelOpen(true)
+end
+
 -- The settings panel was opened (true) or another add-on's panel was picked (false).
 function preview:SetPanelOpen(open)
 	self.forPanel = open and true or false
