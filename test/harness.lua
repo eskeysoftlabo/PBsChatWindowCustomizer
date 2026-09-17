@@ -23,12 +23,13 @@ function PendingCallLater() return #pendingCallLater end
 
 local frameTime = 0
 function GetFrameTimeMilliseconds() return frameTime end
+function GetFrameTimeSeconds() return frameTime / 1000 end
 function AdvanceFrame(ms) frameTime = frameTime + (ms or 1000) end
 
 function GetAddOnManager()
 	return {
 		GetNumAddOns = function() return 1 end,
-		GetAddOnInfo = function(_, i) return "PBsChatWindowCustomizer", "|cFF69B4PB\u{2019}s ChatWindowCustomizer|r 1.0.1" end,
+		GetAddOnInfo = function(_, i) return "PBsChatWindowCustomizer", "|cFF69B4PB\u{2019}s ChatWindowCustomizer|r 1.1.0" end,
 	}
 end
 
@@ -36,7 +37,8 @@ end
 TOP, LEFT, BOTTOM, RIGHT, CENTER = 1, 2, 4, 8, 128
 TOPLEFT, TOPRIGHT, BOTTOMLEFT, BOTTOMRIGHT = 3, 9, 6, 12
 CT_LABEL, CT_TEXTURE, CT_CONTROL = "label", "texture", "control"
-DL_OVERLAY, DT_HIGH = "overlay", "high"
+DL_BACKGROUND, DL_CONTROLS, DL_OVERLAY, DL_TEXT = "background", "controls", "overlay", "text"
+DT_LOW, DT_MEDIUM, DT_HIGH, DT_PARENT = "low", "medium", "high", "parent"
 TEXT_WRAP_MODE_ELLIPSIS = 1
 SCENE_FRAGMENT_SHOWING, SCENE_FRAGMENT_SHOWN, SCENE_FRAGMENT_HIDING, SCENE_FRAGMENT_HIDDEN = "showing", "shown", "hiding", "hidden"
 
@@ -44,10 +46,15 @@ SCENE_FRAGMENT_SHOWING, SCENE_FRAGMENT_SHOWN, SCENE_FRAGMENT_HIDING, SCENE_FRAGM
 EVENT_ADD_ON_LOADED = "EVENT_ADD_ON_LOADED"
 EVENT_PLAYER_ACTIVATED = "EVENT_PLAYER_ACTIVATED"
 local handlers = {}
+local updates = {}
 EVENT_MANAGER = {
 	RegisterForEvent = function(_, name, event, fn) handlers[event] = handlers[event] or {}; handlers[event][name] = fn end,
 	UnregisterForEvent = function(_, name, event) if handlers[event] then handlers[event][name] = nil end end,
+	RegisterForUpdate = function(_, name, ms, fn) updates[name] = { ms = ms, fn = fn } end,
+	UnregisterForUpdate = function(_, name) updates[name] = nil end,
 }
+function RunUpdates() for _, update in pairs(updates) do update.fn() end end
+function UpdateCount() local n = 0; for _ in pairs(updates) do n = n + 1 end; return n end
 function Fire(event, ...) for _, fn in pairs(handlers[event] or {}) do fn(event, ...) end end
 
 local callbacks = {}
@@ -151,7 +158,13 @@ function Control:SetHidden(h) self.hidden = h end
 function Control:IsHidden() return self.hidden end
 function Control:SetMouseEnabled() end
 function Control:SetDrawLayer(v) self.drawLayer = v end
-function Control:SetDrawTier(v) self.drawTier = v end
+function Control:SetDrawTier(v) CountWrite(self, "draw"); self.drawTier = v end
+function Control:GetDrawTier() return self.drawTier end
+function Control:SetDrawLevel(v) CountWrite(self, "draw"); self.drawLevel = v end
+function Control:GetDrawLevel() return self.drawLevel end
+function Control:SetAlpha(a) self.alpha = a end
+function Control:GetAlpha() return self.alpha or 1 end
+function Control:GetNamedChild(suffix) return self.children and self.children[suffix] end
 function Control:SetHandler(name, fn) self.handlers[name] = fn end
 function Control:SetColor(r, g, b, a) self.color = { r, g, b, a } end
 function Control:SetText(t) self.text = t end
@@ -204,6 +217,9 @@ end
 
 local chatControl = MakeControl("ZO_GamepadTextChat", GuiRoot, "toplevel")
 chatControl.width, chatControl.height = 350, 155
+-- ZO_ChatWindowTopLevelTemplate: tier="MEDIUM" level="ZO_MEDIUM_TIER_KEYBOARD_CHAT_WINDOW"
+chatControl.drawTier, chatControl.drawLevel = DT_MEDIUM, 30
+chatControl.children = { Bg = MakeControl("ZO_GamepadTextChatBg", chatControl, "backdrop") }
 GAMEPAD_CHAT_SYSTEM = {
 	control = chatControl,
 	loaded = false,
@@ -223,6 +239,49 @@ function chat:SetFontSize(n)
 	end
 end
 
+-- The 20-second minimise: the expiry is a file-local only StartVisibilityTimer writes, and the
+-- chat control's OnUpdate is what acts on it (gamepadchatsystem.lua).
+local expirationTime = nil
+local SECONDS_VISIBLE = 20
+
+function chat:StartVisibilityTimer() expirationTime = GetFrameTimeSeconds() + SECONDS_VISIBLE end
+function chat:IsMinimized() return self.isMinimized end
+
+function chat:Minimize()
+	self.control.children.Bg:SetAlpha(0)
+	if self.primaryContainer then self.primaryContainer.windowContainer:SetHidden(true) end
+	self.isMinimized = true
+end
+
+function chat:Maximize()
+	self.control.children.Bg:SetAlpha(1)
+	if self.primaryContainer then self.primaryContainer.windowContainer:SetHidden(false) end
+	self.isMinimized = false
+	self:StartVisibilityTimer()
+end
+
+-- The chat control's OnUpdate. Call after AdvanceFrame.
+function ChatTick()
+	if expirationTime and GetFrameTimeSeconds() > expirationTime then
+		expirationTime = nil
+		chat:Minimize()
+	end
+end
+function ChatExpiry() return expirationTime end
+function ChatMessagesShown() return not chat.primaryContainer.windowContainer:IsHidden() end
+function ChatBackgroundAlpha() return chat.control.children.Bg:GetAlpha() end
+
+-- ZO_MinimizeChatFragment, which every menu scene carries.
+local wasChatMaximized = false
+function MinimizeChatFragmentShow()
+	wasChatMaximized = not chat:IsMinimized()
+	if wasChatMaximized then chat:Minimize() end
+end
+function MinimizeChatFragmentHide()
+	if wasChatMaximized and chat:IsMinimized() then chat:Maximize() end
+	wasChatMaximized = false
+end
+
 -- SharedChatContainer:CalculateConstraints, run whenever the tabs are laid out.
 function chat:PerformLayout()
 	self.control:SetDimensionConstraints(self.minContainerWidth, self.minContainerHeight, self.maxContainerWidth, self.maxContainerHeight)
@@ -236,7 +295,7 @@ function chat:LoadSettings()
 end
 
 function LoadChat()
-	local container = { windows = {} }
+	local container = { windows = {}, windowContainer = MakeControl("ZO_GamepadTextChatWindowContainer", chatControl, "control") }
 	for i = 1, 3 do
 		container.windows[i] = { buffer = MakeControl("ZO_GamepadChatWindow" .. i .. "Buffer", nil, "textbuffer") }
 	end
@@ -246,6 +305,8 @@ function LoadChat()
 	chat:LoadSettings()
 	chat:SetFontSize(GetGamepadChatFontSize())
 	chat.loaded = true
+	-- ZO_GamepadChatSystem:LoadChatFromSettings ends with Minimize()
+	chat:Minimize()
 end
 
 function ChatBufferFont(i) return chat.containers[1].windows[i or 1].buffer.font end

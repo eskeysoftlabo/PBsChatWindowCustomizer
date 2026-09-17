@@ -36,13 +36,14 @@ local GAME_FONT_20 = CHAT_FACE .. "|$(GP_20)|soft-shadow-thick"
 print("\n== 1. load ==")
 Fire(EVENT_ADD_ON_LOADED, "PBsChatWindowCustomizer")
 local addon = PBS_CHAT_WINDOW_CUSTOMIZER
-check("version read from manifest", addon.version, "1.0.1")
+check("version read from manifest", addon.version, "1.1.0")
 check("slash command registered", type(SLASH_COMMANDS["/pbchatwin"]), "function")
 check("short slash command registered", type(SLASH_COMMANDS["/pbcw"]), "function")
 check("HUD fragment callback registered", addon.hudRegistered, true)
--- explanation, 2 checkboxes, heading + dropdown + 2 sliders, heading + 2 sliders,
--- heading + slider, heading + button + hint
-check("settings rows", #PanelRows, 15)
+-- explanation, 2 checkboxes, heading + dropdown + 2 sliders (position), heading + 2 sliders
+-- (size), heading + slider (text), heading + checkbox + dropdown + slider (showing),
+-- heading + button + hint
+check("settings rows", #PanelRows, 19)
 check("nothing touched the chat at load", ChatWrites("anchor"), 0)
 
 print("\n== 2. the first apply waits for the chat ==")
@@ -252,7 +253,82 @@ SLASH_COMMANDS["/pbcw"]("preview")
 check("and toggles it off", frame.hidden, true)
 SLASH_COMMANDS["/pbcw"]("reset")
 
-print("\n== 16. a saved layout is applied at login, after the game's is read ==")
+print("\n== 16. draw order ==")
+local live = addon
+check("game tier measured", live:GameDraw().tier, "medium")
+check("game level measured", live:GameDraw().level, 30)
+check("untouched: no draw difference", live:DrawDiffers(), false)
+check("untouched: nothing written", ChatWrites("draw"), 0)
+Row(GetString(SI_PBSCWC_TIER)).setFunction(nil, nil, { data = "high" })
+check("tier written", control:GetDrawTier(), DT_HIGH)
+check("level left at the game's", control:GetDrawLevel(), 30)
+Row(GetString(SI_PBSCWC_LEVEL)).setFunction(145)
+check("level written", control:GetDrawLevel(), 145)
+check("differs", live:DrawDiffers(), true)
+local drawWrites = ChatWrites("draw")
+FireHud(SCENE_FRAGMENT_SHOWN)
+check("a HUD show does not rewrite it", ChatWrites("draw"), drawWrites)
+SLASH_COMMANDS["/pbcw"]("tier low")
+check("tier via slash", control:GetDrawTier(), DT_LOW)
+SLASH_COMMANDS["/pbcw"]("reset draw")
+check("reset: the game's own tier", control:GetDrawTier(), DT_MEDIUM)
+check("reset: the game's own level", control:GetDrawLevel(), 30)
+check("and nothing of ours is written", live.drawWritten, false)
+
+print("\n== 17. keeping the window on screen ==")
+-- Where the game leaves it: LoadChatFromSettings minimised the chat at login.
+chat:Minimize()
+check("the game has it minimised", ChatMessagesShown(), false)
+Row(GetString(SI_PBSCWC_ALWAYS_VISIBLE)).setFunction(true)
+check("messages shown", ChatMessagesShown(), true)
+check("background back to full", ChatBackgroundAlpha(), 1)
+check("the client's own flag agrees", chat.isMinimized, false)
+check("an expiry was pushed", ChatExpiry() ~= nil, true)
+check("a repeating update is registered", UpdateCount(), 1)
+
+-- The update pushes the expiry every 10 seconds, against the game's 20, so the chat control's
+-- OnUpdate never finds it in the past.
+for _ = 1, 6 do
+	AdvanceFrame(10000)
+	RunUpdates()
+	ChatTick()
+end
+check("a minute later it has not minimised", ChatMessagesShown(), true)
+check("and the expiry is still in the future", ChatExpiry() > GetFrameTimeSeconds(), true)
+
+-- A menu: MINIMIZE_CHAT_FRAGMENT minimises on the way in and maximises on the way out.
+MinimizeChatFragmentShow()
+check("a menu still minimises it", ChatMessagesShown(), false)
+MinimizeChatFragmentHide()
+FireHud(SCENE_FRAGMENT_SHOWN)
+check("back on the HUD it is up again", ChatMessagesShown(), true)
+
+-- A menu that does not maximise on the way out (the fragment only does when it minimised).
+chat:Minimize()
+FireHud(SCENE_FRAGMENT_SHOWN)
+check("the HUD show puts it right either way", ChatMessagesShown(), true)
+check("background too", ChatBackgroundAlpha(), 1)
+
+Row(GetString(SI_PBSCWC_ALWAYS_VISIBLE)).setFunction(false)
+check("switched off: the update is gone", UpdateCount(), 0)
+check("switched off: still on screen for now", ChatMessagesShown(), true)
+AdvanceFrame(25000); ChatTick()
+check("and the game's own timer minimises it", ChatMessagesShown(), false)
+
+Row(GetString(SI_PBSCWC_ALWAYS_VISIBLE)).setFunction(true)
+Row(GetString(SI_PBSCWC_ENABLED)).setFunction(false)
+check("the master switch also hands it back", UpdateCount(), 0)
+AdvanceFrame(25000); ChatTick()
+check("and it minimises as the game would", ChatMessagesShown(), false)
+SLASH_COMMANDS["/pbcw"]("always on")
+check("slash always on: back on screen", ChatMessagesShown(), true)
+check("and it switched the add-on back on", live:Account().enabled, true)
+Row(GetString(SI_PBSCWC_RESET)).clickHandler()
+check("reset turns it off as well", live:Account().alwaysVisible, false)
+check("with the update unregistered", UpdateCount(), 0)
+SLASH_COMMANDS["/pbcw"]("status")
+
+print("\n== 18. a saved layout is applied at login, after the game's is read ==")
 local store = SavedStore.PBsChatWindowCustomizer_Data
 store.layout = { corner = "bottomLeft", x = 30, y = 400, width = 520, height = 360 }
 store.text = { size = 22 }
@@ -274,7 +350,7 @@ check("the original captured is the game's, not ours", reloaded.original.anchors
 reloaded:ResetToDefaults()
 check("so reset still finds the game's layout", Anchor(), "12:0,-215")
 
-print("\n== 17. no gamepad chat on this client ==")
+print("\n== 19. no gamepad chat on this client ==")
 local saved = GAMEPAD_CHAT_SYSTEM
 GAMEPAD_CHAT_SYSTEM = nil
 check("apply is a quiet no-op", reloaded:ApplyLayout(), false)
