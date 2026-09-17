@@ -36,14 +36,15 @@ local GAME_FONT_20 = CHAT_FACE .. "|$(GP_20)|soft-shadow-thick"
 print("\n== 1. load ==")
 Fire(EVENT_ADD_ON_LOADED, "PBsChatWindowCustomizer")
 local addon = PBS_CHAT_WINDOW_CUSTOMIZER
-check("version read from manifest", addon.version, "1.1.0")
+check("version read from manifest", addon.version, "1.2.0")
 check("slash command registered", type(SLASH_COMMANDS["/pbchatwin"]), "function")
 check("short slash command registered", type(SLASH_COMMANDS["/pbcw"]), "function")
 check("HUD fragment callback registered", addon.hudRegistered, true)
+check("scene callback registered", addon.scenesRegistered, true)
 -- explanation, 2 checkboxes, heading + dropdown + 2 sliders (position), heading + 2 sliders
 -- (size), heading + slider (text), heading + checkbox + dropdown + slider (showing),
 -- heading + button + hint
-check("settings rows", #PanelRows, 19)
+check("settings rows", #PanelRows, 20)
 check("nothing touched the chat at load", ChatWrites("anchor"), 0)
 
 print("\n== 2. the first apply waits for the chat ==")
@@ -327,6 +328,52 @@ Row(GetString(SI_PBSCWC_RESET)).clickHandler()
 check("reset turns it off as well", live:Account().alwaysVisible, false)
 check("with the update unregistered", UpdateCount(), 0)
 SLASH_COMMANDS["/pbcw"]("status")
+
+print("\n== 17b. showing it in menus ==")
+Row(GetString(SI_PBSCWC_ALWAYS_VISIBLE)).setFunction(false)
+OpenMenu()
+check("the game hides the window in a menu", ChatWindowShown(), false)
+CloseMenu()
+check("and shows it again on the HUD", ChatWindowShown(), true)
+
+Row(GetString(SI_PBSCWC_IN_MENUS)).setFunction(true)
+check("keeping it on screen came with it", live:Account().alwaysVisible or live:AlwaysVisible(), true)
+OpenMenu()
+check("the window is up in the menu", ChatWindowShown(), true)
+check("with its messages", ChatMessagesShown(), true)
+FlushCallLater() -- the re-assert a moment after the transition
+check("still up once the transition has settled", ChatWindowShown(), true)
+
+-- Something minimising the chat later in the same menu, with no scene change to notice it: the
+-- ten-second push is the backstop.
+chat:Minimize()
+chat:RefreshVisibility()
+RunUpdates()
+check("a later minimise in the same menu is undone", ChatMessagesShown(), true)
+check("and the window with it", ChatWindowShown(), true)
+
+-- Menu to menu never touches the HUD fragment.
+chat.control:SetHidden(true)
+SceneShown({ name = "another menu" })
+check("a scene change puts it back", ChatWindowShown(), true)
+
+CloseMenu()
+check("back on the HUD, still up", ChatWindowShown(), true)
+
+-- The game's own "chat on the HUD" setting is never overridden.
+chat.hudEnabled = false
+OpenMenu()
+check("nothing is forced while the player has chat off", ChatWindowShown(), false)
+chat.hudEnabled = true
+CloseMenu()
+
+Row(GetString(SI_PBSCWC_IN_MENUS)).setFunction(false)
+OpenMenu()
+check("switched off: the game hides it again", ChatWindowShown(), false)
+CloseMenu()
+check("and the HUD shows it", ChatWindowShown(), true)
+AdvanceFrame(25000); ChatTick()
+check("and it minimises as the game would", ChatMessagesShown(), false)
 
 print("\n== 18. a saved layout is applied at login, after the game's is read ==")
 local store = SavedStore.PBsChatWindowCustomizer_Data

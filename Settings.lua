@@ -220,6 +220,29 @@ function addon:InitSettings()
 		}
 	)
 
+	settings:AddSetting(
+		{
+			type = LibHarvensAddonSettings.ST_CHECKBOX,
+			label = GetString(SI_PBSCWC_IN_MENUS),
+			tooltip = GetString(SI_PBSCWC_IN_MENUS_TOOLTIP),
+			default = false,
+			getFunction = function()
+				return self:Account().inMenus
+			end,
+			setFunction = function(value)
+				self:Account().inMenus = value
+				if value then
+					self:Account().enabled = true
+				end
+				self:Refresh()
+				-- Switching this on keeps the window up as well, which is the row above.
+				if settings.UpdateControls then
+					settings:UpdateControls()
+				end
+			end
+		}
+	)
+
 	local tierItems = {}
 	local tierItemByKey = {}
 	for _, tier in ipairs(self.tiers) do

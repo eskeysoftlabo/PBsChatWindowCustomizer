@@ -29,7 +29,7 @@ function AdvanceFrame(ms) frameTime = frameTime + (ms or 1000) end
 function GetAddOnManager()
 	return {
 		GetNumAddOns = function() return 1 end,
-		GetAddOnInfo = function(_, i) return "PBsChatWindowCustomizer", "|cFF69B4PB\u{2019}s ChatWindowCustomizer|r 1.1.0" end,
+		GetAddOnInfo = function(_, i) return "PBsChatWindowCustomizer", "|cFF69B4PB\u{2019}s ChatWindowCustomizer|r 1.2.0" end,
 	}
 end
 
@@ -223,6 +223,8 @@ chatControl.children = { Bg = MakeControl("ZO_GamepadTextChatBg", chatControl, "
 GAMEPAD_CHAT_SYSTEM = {
 	control = chatControl,
 	loaded = false,
+	-- UI_SETTING_GAMEPAD_CHAT_HUD_ENABLED: the player's own "show chat on the HUD" setting.
+	hudEnabled = true,
 	containers = {},
 	minContainerWidth = 300, maxContainerWidth = 550, minContainerHeight = 170, maxContainerHeight = 380,
 }
@@ -238,6 +240,15 @@ function chat:SetFontSize(n)
 		end
 	end
 end
+
+-- ZO_GamepadChatSystem:IsHidden / SharedChatSystem:RefreshVisibility -- the chat is drawn on the
+-- HUD and nowhere else.
+HudShowing = true
+function chat:IsHidden()
+	if not self.hudEnabled then return true end
+	return not HudShowing
+end
+function chat:RefreshVisibility() self.control:SetHidden(self:IsHidden()) end
 
 -- The 20-second minimise: the expiry is a file-local only StartVisibilityTimer writes, and the
 -- chat control's OnUpdate is what acts on it (gamepadchatsystem.lua).
@@ -270,6 +281,28 @@ end
 function ChatExpiry() return expirationTime end
 function ChatMessagesShown() return not chat.primaryContainer.windowContainer:IsHidden() end
 function ChatBackgroundAlpha() return chat.control.children.Bg:GetAlpha() end
+
+-- ZO_HUDFragment:UpdateVisibility, plus the minimise fragment every menu scene carries: one call
+-- for what the client does when a menu opens, and one for closing it again.
+function OpenMenu()
+	HudShowing = false
+	MinimizeChatFragmentShow()
+	chat:RefreshVisibility()
+	FireHud(SCENE_FRAGMENT_HIDDEN)
+	CurrentScene = { name = "menu" }
+	local scene = CurrentScene
+	SceneShown(scene)
+end
+
+function CloseMenu()
+	HudShowing = true
+	MinimizeChatFragmentHide()
+	chat:RefreshVisibility()
+	CurrentScene = MenuScene
+	FireHud(SCENE_FRAGMENT_SHOWN)
+end
+
+function ChatWindowShown() return not chat.control:IsHidden() end
 
 -- ZO_MinimizeChatFragment, which every menu scene carries.
 local wasChatMaximized = false
@@ -316,7 +349,14 @@ local hudCallbacks = {}
 HUD_FRAGMENT = { RegisterCallback = function(_, name, fn) table.insert(hudCallbacks, fn) end }
 function FireHud(state) for _, fn in ipairs(hudCallbacks) do fn(nil, state) end end
 CurrentScene = { name = "gamepad_settings" }
-SCENE_MANAGER = { GetCurrentScene = function() return CurrentScene end }
+local sceneCallbacks = {}
+SCENE_MANAGER = {
+	GetCurrentScene = function() return CurrentScene end,
+	RegisterCallback = function(_, name, fn) sceneCallbacks[name] = sceneCallbacks[name] or {}; table.insert(sceneCallbacks[name], fn) end,
+}
+function SceneShown(scene)
+	for _, fn in ipairs(sceneCallbacks.SceneStateChanged or {}) do fn(scene, SCENE_SHOWING, SCENE_SHOWN) end
+end
 
 SCENE_SHOWING, SCENE_SHOWN, SCENE_HIDING, SCENE_HIDDEN = "showing", "shown", "hiding", "hidden"
 local function MakeScene(name)

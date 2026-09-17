@@ -38,6 +38,9 @@ local strings = {
 	SI_PBSCWC_ALWAYS_VISIBLE = "Keep the window on screen",
 	SI_PBSCWC_ALWAYS_VISIBLE_TOOLTIP = "The game minimises the chat 20 seconds after the last message: the messages disappear and the background fades away until something new arrives. With this on, the window stays as it is for as long as you are on the HUD. The input line is not affected -- it still only appears when you start typing. Switching this off hands the window back to the game's own 20-second timer.",
 
+	SI_PBSCWC_IN_MENUS = "Show it in menus too",
+	SI_PBSCWC_IN_MENUS_TOOLTIP = "The game only draws the chat on the HUD: open the map, the inventory or any menu and the window goes away. With this on it stays on screen there as well, so you can read chat while you are in a menu. It is still not something you can type in from a menu -- that is the menu's own input. Keeping the window on screen goes on with it, because a window that appeared in a menu and then faded twenty seconds later would be worse than either. If a menu covers the window, set Drawn to in front of the interface. Nothing is forced while you have the chat switched off under Settings > Social.",
+
 	SI_PBSCWC_TIER = "Drawn",
 	SI_PBSCWC_TIER_TOOLTIP = "Where the chat window sits in the stack of things drawn on screen. The game draws it above the HUD but below keybind strips, tooltips and announcements. Behind puts it under the rest of the interface, so a HUD element over it wins; In front puts it over almost everything, which is what to pick if something is covering the chat.",
 	SI_PBSCWC_TIER_LOW = "Behind the interface",

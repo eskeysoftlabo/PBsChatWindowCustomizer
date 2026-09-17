@@ -25,13 +25,16 @@
 --                    number instead of one of the three $(GP_n) steps.
 --   draw order       the tier and level of the same control. The game draws the chat at
 --                    MEDIUM / 30: over the HUD, under keybind strips and tooltips.
+--   where it shows   the client draws the chat on the HUD and nowhere else (IsHidden), so the
+--                    window is shown again after its RefreshVisibility has hidden it, for
+--                    players who want to read chat with a menu open.
 --   staying up       the chat minimises itself 20 seconds after the last message. The expiry
 --                    behind that is a file-local only StartVisibilityTimer writes, so keeping
 --                    it in the future stops the minimise; the message area and the
 --                    background's alpha put right what an earlier minimise did.
 --
--- All of it is writes to controls and fields, with one exception: StartVisibilityTimer, whose
--- whole body is that one assignment. Nothing in the chat is hooked or wrapped, and
+-- All of it is writes to controls and fields, with two exceptions -- StartVisibilityTimer and
+-- RefreshVisibility, each of which is one assignment or one SetHidden and nothing else. Nothing in the chat is hooked or wrapped, and
 -- no chat code is called: the chat is the one piece of UI where every message the player sends
 -- goes through the client's own closures, and an add-on frame anywhere near those is how a
 -- private-function error is born. See FINDINGS.md, "Why nothing is hooked".
@@ -247,6 +250,7 @@ addon.accountDefaults = {
 	enabled = true,
 	preview = true,
 	alwaysVisible = false,
+	inMenus = false,
 	layout = {},
 	draw = {},
 	text = {},
@@ -276,6 +280,9 @@ function addon:Account()
 	end
 	if account.alwaysVisible == nil then
 		account.alwaysVisible = false
+	end
+	if account.inMenus == nil then
+		account.inMenus = false
 	end
 	if type(account.draw) ~= "table" then
 		account.draw = {}
@@ -789,9 +796,33 @@ end
 
 local VISIBILITY_PUSH_MS = 10000
 
+-- Long enough for the rest of a scene transition to have run, short enough not to be seen.
+local MENU_REASSERT_MS = 50
+
 function addon:AlwaysVisible()
 	local account = self:Account()
-	return account.enabled and account.alwaysVisible == true
+	if not account.enabled then
+		return false
+	end
+	-- Showing it in menus means keeping it up: a window that appears in a menu and then
+	-- minimises itself twenty seconds later is worse than either behaviour on its own.
+	return account.alwaysVisible == true or account.inMenus == true
+end
+
+-- Whether the window should also be on screen where the game hides it outright.
+--
+-- ZO_GamepadChatSystem:IsHidden is "only on the HUD": it answers hidden unless HUD_FRAGMENT is
+-- showing, and RefreshVisibility is the one thing that turns that answer into
+-- control:SetHidden. Never forced while the player has the chat switched off in the game's own
+-- settings -- hudEnabled is that setting -- because then the window is not meant to be there at
+-- all.
+function addon:ShowInMenus()
+	local account = self:Account()
+	if not (account.enabled and account.inMenus == true) then
+		return false
+	end
+	local chat = self:Chat()
+	return chat ~= nil and chat.hudEnabled == true
 end
 
 -- The two controls a minimise leaves hidden or transparent.
@@ -818,7 +849,14 @@ function addon:ApplyVisibility()
 	if not self:AlwaysVisible() then
 		if self.visibilityWritten then
 			-- Hand the window back to the game's own timer rather than minimising it here: the
-			-- client then does it in its own time, in its own way.
+			-- client then does it in its own time, in its own way. RefreshVisibility is the
+			-- other chat call this add-on makes, and for the same reason as the timer: its whole
+			-- body is control:SetHidden(self:IsHidden()), so it decides where the window belongs
+			-- by the client's own rules -- game setting and HUD included -- without this add-on
+			-- having to copy them.
+			if type(chat.RefreshVisibility) == "function" then
+				self:Write("visibility", chat.RefreshVisibility, chat)
+			end
 			self:PushVisibilityTimer(chat)
 			if EVENT_MANAGER and type(EVENT_MANAGER.UnregisterForUpdate) == "function" then
 				EVENT_MANAGER:UnregisterForUpdate(self.name .. "Visible")
@@ -856,6 +894,13 @@ function addon:KeepVisible()
 	end
 
 	self:PushVisibilityTimer(chat)
+
+	-- The client hides the whole control when the HUD goes away; shown again here, after its
+	-- RefreshVisibility has had its say. A hidden control gets no OnUpdate, so this is also what
+	-- starts the chat's own visibility timer ticking in a menu -- which the push above answers.
+	if self:ShowInMenus() and chat.control:IsHidden() then
+		self:Write("visibility", chat.control.SetHidden, chat.control, false)
+	end
 
 	local windowContainer, background = self:VisibilityControls(chat)
 	if windowContainer and windowContainer:IsHidden() then
@@ -1113,6 +1158,7 @@ function addon:ResetToDefaults()
 	self:ResetDraw()
 	self:ResetFont()
 	self:Account().alwaysVisible = false
+	self:Account().inMenus = false
 	self:Refresh()
 end
 
@@ -1188,8 +1234,8 @@ function addon:PrintStatus()
 	Line("|cFF69B4%s|r", self.title)
 	Line("  chat: found=%s loaded=%s buffers=%d  screen=%dx%d",
 		tostring(chat ~= nil), tostring(ready), self:ForEachChatBuffer(function() end), Round(rootWidth), Round(rootHeight))
-	Line("  enabled=%s preview=%s alwaysVisible=%s", tostring(account.enabled), tostring(account.preview),
-		tostring(account.alwaysVisible))
+	Line("  enabled=%s preview=%s alwaysVisible=%s inMenus=%s", tostring(account.enabled), tostring(account.preview),
+		tostring(account.alwaysVisible), tostring(account.inMenus))
 
 	Line("  layout:  %s  differs=%s written=%s", DescribeLayout(self:Clamped(self:Layout())),
 		tostring(self:LayoutDiffers()), tostring(self.layoutWritten == true))
@@ -1237,9 +1283,11 @@ function addon:PrintStatus()
 		if background and type(background.GetAlpha) == "function" then
 			ok, alpha = pcall(background.GetAlpha, background)
 		end
-		Line("  on screen visibility: minimized=%s messages=%s background alpha=%s",
-			tostring(chat.isMinimized), windowContainer and tostring(not windowContainer:IsHidden()) or "?",
+		Line("  on screen visibility: window=%s minimized=%s messages=%s background alpha=%s",
+			tostring(not chat.control:IsHidden()), tostring(chat.isMinimized),
+			windowContainer and tostring(not windowContainer:IsHidden()) or "?",
 			ok and string.format("%.2f", alpha) or "?")
+		Line("  chat on HUD (the game's own setting)=%s", tostring(chat.hudEnabled))
 	end
 
 	Line("  text: size=%d default=%d setting=%s differs=%s written=%s", self:FontSize(), self:DefaultFontSize(),
@@ -1269,6 +1317,7 @@ local function Usage()
 	Line("  %s size <w> <h>     -- width and height", SLASH)
 	Line("  %s font <n>         -- message text size (%d-%d)", SLASH, addon.MIN_FONT_SIZE, addon.MAX_FONT_SIZE)
 	Line("  %s always on | off  -- keep the window on screen instead of fading after 20s", SLASH)
+	Line("  %s menus on | off   -- show it in menus too, not only on the HUD", SLASH)
 	Line("  %s tier low|medium|high  -- draw the window under or over the rest of the UI", SLASH)
 	Line("  %s level <n>        -- order within that tier (%d-%d)", SLASH, addon.MIN_DRAW_LEVEL, addon.MAX_DRAW_LEVEL)
 	Line("  %s on | off         -- switch every change on or off", SLASH)
@@ -1354,6 +1403,18 @@ local function OnSlash(argumentString)
 		end
 		addon:Refresh()
 		Line("always visible: %s", what)
+	elseif command == "menus" or command == "menu" then
+		local what = (args[2] or ""):lower()
+		if what ~= "on" and what ~= "off" then
+			Line("usage: %s menus on | off", SLASH)
+			return
+		end
+		account.inMenus = what == "on"
+		if account.inMenus then
+			account.enabled = true
+		end
+		addon:Refresh()
+		Line("shown in menus: %s", what)
 	elseif command == "tier" then
 		local tier = addon.tierByCommand[(args[2] or ""):lower()]
 		if not tier then
@@ -1474,6 +1535,30 @@ local function RegisterHud()
 	fragment:RegisterCallback("StateChange", function(_, newState)
 		if newState == SCENE_FRAGMENT_SHOWN then
 			addon:OnHudShowing()
+		elseif addon:ShowInMenus() then
+			-- The HUD going away is where the client hides the chat, and where
+			-- MINIMIZE_CHAT_FRAGMENT minimises it. Both are undone here -- and again a moment
+			-- later, because the two fragments belong to the same transition and nothing says
+			-- which of them runs first.
+			addon:ApplyVisibility()
+			Later(function()
+				addon:KeepVisible()
+			end, MENU_REASSERT_MS)
+		end
+	end)
+	return true
+end
+
+-- Menu to menu never touches the HUD fragment, and a scene that hides the chat for its own
+-- reasons would otherwise be waiting on the ten-second check. Registered on the scene manager's
+-- own callback list, beside the client's.
+local function RegisterScenes()
+	if not SCENE_MANAGER or type(SCENE_MANAGER.RegisterCallback) ~= "function" then
+		return false
+	end
+	SCENE_MANAGER:RegisterCallback("SceneStateChanged", function(_, _, newState)
+		if newState == SCENE_SHOWN and addon:ShowInMenus() then
+			addon:KeepVisible()
 		end
 	end)
 	return true
@@ -1492,6 +1577,7 @@ local function OnAddOnLoaded(_, loadedName)
 	SLASH_COMMANDS[SHORT_SLASH] = OnSlash
 
 	addon.hudRegistered = RegisterHud()
+	addon.scenesRegistered = RegisterScenes()
 
 	if addon.InitSettings then
 		addon:InitSettings()
