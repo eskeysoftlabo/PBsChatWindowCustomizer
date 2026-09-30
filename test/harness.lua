@@ -29,7 +29,7 @@ function AdvanceFrame(ms) frameTime = frameTime + (ms or 1000) end
 function GetAddOnManager()
 	return {
 		GetNumAddOns = function() return 1 end,
-		GetAddOnInfo = function(_, i) return "PBsChatWindowCustomizer", "|cFF69B4PB\u{2019}s ChatWindowCustomizer|r 1.3.0" end,
+		GetAddOnInfo = function(_, i) return "PBsChatWindowCustomizer", "|cFF69B4PB\u{2019}s ChatWindowCustomizer|r 1.3.1" end,
 	}
 end
 
@@ -39,6 +39,7 @@ TOPLEFT, TOPRIGHT, BOTTOMLEFT, BOTTOMRIGHT = 3, 9, 6, 12
 CT_LABEL, CT_TEXTURE, CT_CONTROL = "label", "texture", "control"
 DL_BACKGROUND, DL_CONTROLS, DL_OVERLAY, DL_TEXT = "background", "controls", "overlay", "text"
 DT_LOW, DT_MEDIUM, DT_HIGH, DT_PARENT = "low", "medium", "high", "parent"
+CONTROL_HANDLER_ORDER_NONE, CONTROL_HANDLER_ORDER_BEFORE, CONTROL_HANDLER_ORDER_AFTER = "none", "before", "after"
 TEXT_WRAP_MODE_ELLIPSIS = 1
 SCENE_FRAGMENT_SHOWING, SCENE_FRAGMENT_SHOWN, SCENE_FRAGMENT_HIDING, SCENE_FRAGMENT_HIDDEN = "showing", "shown", "hiding", "hidden"
 
@@ -125,14 +126,18 @@ function SetRootSize(w, h) rootWidth, rootHeight = w, h end
 
 local Control = {}
 Control.__index = Control
+AllControls = {}
 function MakeControl(name, parent, kind)
-	return setmetatable({ name = name, parent = parent or GuiRoot, kind = kind, anchors = {}, width = 0, height = 0, hidden = false, handlers = {} }, Control)
+	local control = setmetatable({ name = name, parent = parent or GuiRoot, kind = kind, anchors = {}, width = 0, height = 0, hidden = false, handlers = {}, named = {} }, Control)
+	AllControls[#AllControls + 1] = control
+	return control
 end
 function Control:GetName() return self.name end
 function Control:GetParent() return self.parent end
-function Control:ClearAnchors() CountWrite(self, "anchor"); self.anchors = {} end
+function Control:ClearAnchors() CountWrite(self, "anchor"); self.anchors = {}; self.rectDirty = true end
 function Control:SetAnchor(point, relativeTo, relativePoint, offsetX, offsetY, constrains)
 	CountWrite(self, "anchor")
+	self.rectDirty = true
 	assert(#self.anchors < 2, self.name .. " already has two anchors")
 	table.insert(self.anchors, { point = point, relativeTo = relativeTo, relativePoint = relativePoint or point, offsetX = offsetX or 0, offsetY = offsetY or 0, constrains = constrains })
 end
@@ -144,6 +149,7 @@ function Control:GetAnchor(index)
 end
 function Control:SetDimensions(w, h)
 	CountWrite(self, "dimensions")
+	self.rectDirty = true
 	local c = self.constraints
 	if c then
 		-- The client applies the constraints when the size is set.
@@ -157,7 +163,11 @@ function Control:SetHeight(h) self.height = h end
 function Control:GetHeight() return self.height end
 function Control:SetDimensionConstraints(a, b, c, d) CountWrite(self, "constraints"); self.constraints = { a, b, c, d } end
 function Control:GetDimensionConstraints() local c = self.constraints or { 0, 0, 0, 0 }; return c[1], c[2], c[3], c[4] end
-function Control:SetHidden(h) self.hidden = h end
+function Control:SetHidden(h)
+	local wasHidden = self.hidden
+	self.hidden = h
+	if wasHidden and not h then self.shownDirty = true end
+end
 function Control:IsHidden() return self.hidden end
 function Control:SetMouseEnabled() end
 function Control:SetDrawLayer(v) self.drawLayer = v end
@@ -168,7 +178,22 @@ function Control:GetDrawLevel() return self.drawLevel end
 function Control:SetAlpha(a) self.alpha = a end
 function Control:GetAlpha() return self.alpha or 1 end
 function Control:GetNamedChild(suffix) return self.children and self.children[suffix] end
-function Control:SetHandler(name, fn) self.handlers[name] = fn end
+-- SetHandler(eventName, fn, handlerName, order): a third argument is a separate, named handler
+-- that sits beside the control's own; nil removes it, as the client does with
+-- "ZO_CustomAnimationSceneFragment".
+function Control:SetHandler(name, fn, handlerName, order)
+	if handlerName then
+		self.named[name .. ":" .. handlerName] = fn
+	else
+		self.handlers[name] = fn
+	end
+end
+function Control:Fire(name, ...)
+	if self.handlers[name] then self.handlers[name](self, ...) end
+	for key, fn in pairs(self.named) do
+		if key:sub(1, #name + 1) == name .. ":" then fn(self, ...) end
+	end
+end
 function Control:SetColor(r, g, b, a) self.color = { r, g, b, a } end
 function Control:SetText(t) self.text = t end
 function Control:SetWrapMode(m) self.wrapMode = m end
@@ -194,6 +219,32 @@ function Control:GetTop()
 	return rootHeight + a.offsetY - self.height
 end
 function Control:Tick() if self.handlers.OnUpdate then self.handlers.OnUpdate(self) end end
+
+-- The engine resolves layouts once per frame, and raises OnRectChanged for every control whose
+-- rectangle changed, and OnEffectivelyShown for one that has just become visible. A handler that
+-- writes again dirties the control and is run on the next round; a writer that never stops is cut
+-- off here, as the engine would at least stop being usable. Returns the number of rounds.
+function LayoutPass(maxRounds)
+	local rounds = 0
+	maxRounds = maxRounds or 12
+	repeat
+		local any = false
+		for _, control in ipairs(AllControls) do
+			if control.shownDirty then
+				control.shownDirty = false
+				any = true
+				control:Fire("OnEffectivelyShown", false)
+			end
+			if control.rectDirty then
+				control.rectDirty = false
+				any = true
+				control:Fire("OnRectChanged")
+			end
+		end
+		if any then rounds = rounds + 1 end
+	until not any or rounds >= maxRounds
+	return rounds
+end
 
 CreatedControls = {}
 WINDOW_MANAGER = {
@@ -240,6 +291,8 @@ chatControl.width, chatControl.height = 350, 155
 -- ZO_ChatWindowTopLevelTemplate: tier="MEDIUM" level="ZO_MEDIUM_TIER_KEYBOARD_CHAT_WINDOW"
 chatControl.drawTier, chatControl.drawLevel = DT_MEDIUM, 30
 chatControl.children = { Bg = MakeControl("ZO_GamepadTextChatBg", chatControl, "backdrop") }
+-- ZO_GamepadChatSystem:Initialize sets the control's own OnUpdate (the 20-second minimise).
+chatControl.handlers.OnUpdate = function() end
 -- ZO_HUDManager_Element, as far as this add-on and PropagateSettings are concerned. The chat
 -- registers itself with CONFIG.defaultAnchor built from its own ANCHOR_SETTINGS.
 local chatElement = {

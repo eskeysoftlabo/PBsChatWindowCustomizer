@@ -36,7 +36,7 @@ local GAME_FONT_20 = CHAT_FACE .. "|$(GP_20)|soft-shadow-thick"
 print("\n== 1. load ==")
 Fire(EVENT_ADD_ON_LOADED, "PBsChatWindowCustomizer")
 local addon = PBS_CHAT_WINDOW_CUSTOMIZER
-check("version read from manifest", addon.version, "1.3.0")
+check("version read from manifest", addon.version, "1.3.1")
 check("slash command registered", type(SLASH_COMMANDS["/pbchatwin"]), "function")
 check("short slash command registered", type(SLASH_COMMANDS["/pbcw"]), "function")
 check("HUD fragment callback registered", addon.hudRegistered, true)
@@ -70,6 +70,7 @@ check("no anchor written by us", ChatWrites("anchor"), gameAnchorWrites)
 check("chat still at the game's anchor", Anchor(), "12:0,-215")
 check("buffer still has the game's font", ChatBufferFont(), GAME_FONT_20)
 check("no font built", CountBuilds(), 0)
+check("no handler added to the chat while untouched", next(chat.control.named), nil)
 check("default text size is the measured one, not 20", addon:DefaultFontSize(), 15)
 
 print("\n== 4. width ==")
@@ -421,6 +422,70 @@ check("and status says there is none", live:HudElement(), nil)
 SLASH_COMMANDS["/pbcw"]("reset")
 RestoreHudElement()
 SLASH_COMMANDS["/pbcw"]("status")
+
+print("\n== 17d. corrected as it happens, not on a timer ==")
+SLASH_COMMANDS["/pbcw"]("reset")
+check("reset took the handlers off", next(control.named), nil)
+check("and the flag says so", live.rectWatchInstalled, false)
+SLASH_COMMANDS["/pbcw"]("size 900 500")
+SLASH_COMMANDS["/pbcw"]("pos 40 300")
+check("a write installs both named handlers", (control.named["OnRectChanged:PBsChatWindowCustomizer"] ~= nil)
+	and (control.named["OnEffectivelyShown:PBsChatWindowCustomizer"] ~= nil), true)
+check("the client's own OnUpdate is untouched", control.handlers.OnUpdate ~= nil, true)
+LayoutPass()
+
+-- Whatever writes the game's size after a zone load, seen at the next layout: no timer has run,
+-- no scheduled look has fired -- only the engine's own notice.
+local correctedBefore = live.rectCorrections or 0
+BreakTheWindow()
+local rounds = LayoutPass()
+check("the size is back at the layout pass", Dims(), "900x500")
+check("with the position", Anchor(), "12:-40,-300")
+check("in one correction", (live.rectCorrections or 0) - correctedBefore, 1)
+check("and the layout settled", rounds <= 3, true)
+
+-- Position written by the client (LoadSettings is what the game itself runs).
+chat:LoadSettings()
+LayoutPass()
+check("the game's own LoadSettings is undone at once", Dims() .. " " .. Anchor(), "900x500 12:-40,-300")
+
+-- What the client does to the HUD element on a resize.
+control:SetDimensions(490, 280)
+HUD_MANAGER:PropagateSettings()
+LayoutPass()
+check("a propagate is corrected at the layout pass too", Dims() .. " " .. Anchor(), "900x500 12:-40,-300")
+
+-- A window that was wrong while hidden is caught as it appears.
+control:SetHidden(true)
+LayoutPass()
+BreakTheWindow()
+control.rectDirty = false -- the engine did not lay a hidden control out
+control:SetHidden(false)
+LayoutPass()
+check("fixed the moment it is shown", Dims(), "900x500")
+
+-- Once it is right the handler does nothing.
+local writes = ChatWrites("dimensions")
+LayoutPass()
+check("no write when nothing is wrong", ChatWrites("dimensions"), writes)
+
+-- A writer that fights every correction: the engine would spin on its own handler whatever this
+-- add-on did, so what is ours to bound is how many corrections it is drawn into in one frame.
+control:SetHandler("OnRectChanged", function() control:SetDimensions(490, 280) end, "Stubborn")
+local correctedBefore = live.rectCorrections or 0
+BreakTheWindow()
+LayoutPass(40)
+check("corrections in one frame are bounded", (live.rectCorrections or 0) - correctedBefore <= live.MAX_CORRECTIONS_PER_FRAME, true)
+check("and the give-up is counted", (live.rectGaveUp or 0) > 0, true)
+control:SetHandler("OnRectChanged", nil, "Stubborn")
+AdvanceFrame(16) -- the next frame starts a fresh count
+BreakTheWindow()
+LayoutPass()
+check("once it stops, the next frame puts the window right", Dims(), "900x500")
+
+SLASH_COMMANDS["/pbcw"]("status")
+SLASH_COMMANDS["/pbcw"]("reset")
+check("reset removes the handlers again", next(control.named), nil)
 
 print("\n== 18. a saved layout is applied at login, after the game's is read ==")
 local store = SavedStore.PBsChatWindowCustomizer_Data
