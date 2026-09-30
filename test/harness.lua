@@ -29,7 +29,7 @@ function AdvanceFrame(ms) frameTime = frameTime + (ms or 1000) end
 function GetAddOnManager()
 	return {
 		GetNumAddOns = function() return 1 end,
-		GetAddOnInfo = function(_, i) return "PBsChatWindowCustomizer", "|cFF69B4PB\u{2019}s ChatWindowCustomizer|r 1.2.0" end,
+		GetAddOnInfo = function(_, i) return "PBsChatWindowCustomizer", "|cFF69B4PB\u{2019}s ChatWindowCustomizer|r 1.3.0" end,
 	}
 end
 
@@ -45,6 +45,9 @@ SCENE_FRAGMENT_SHOWING, SCENE_FRAGMENT_SHOWN, SCENE_FRAGMENT_HIDING, SCENE_FRAGM
 -- ---- events -------------------------------------------------------------------------
 EVENT_ADD_ON_LOADED = "EVENT_ADD_ON_LOADED"
 EVENT_PLAYER_ACTIVATED = "EVENT_PLAYER_ACTIVATED"
+EVENT_SCREEN_RESIZED = "EVENT_SCREEN_RESIZED"
+EVENT_ALL_GUI_SCREENS_RESIZED = "EVENT_ALL_GUI_SCREENS_RESIZED"
+EVENT_GAMEPAD_PREFERRED_MODE_CHANGED = "EVENT_GAMEPAD_PREFERRED_MODE_CHANGED"
 local handlers = {}
 local updates = {}
 EVENT_MANAGER = {
@@ -204,6 +207,23 @@ WINDOW_MANAGER = {
 	end,
 }
 
+-- ---- ZO_Anchor, and the U51 customizable HUD element --------------------------------
+-- libraries/utility/zo_anchor.lua: a plain data object. Set() is ClearAnchors + SetAnchor.
+ZO_Anchor = {}
+ZO_Anchor.__index = ZO_Anchor
+function ZO_Anchor:New(point, target, relPoint, offsetX, offsetY, constraints)
+	return setmetatable({ data = { point, target, relPoint or point, offsetX or 0, offsetY or 0, constraints } }, ZO_Anchor)
+end
+function ZO_Anchor:Get() local d = self.data; return d[1], d[2], d[3], d[4], d[5], d[6] end
+function ZO_Anchor:SetMyPoint(v) self.data[1] = v end
+function ZO_Anchor:SetRelativePoint(v) self.data[3] = v end
+function ZO_Anchor:SetTarget(v) self.data[2] = v end
+function ZO_Anchor:GetOffsets() return self.data[4], self.data[5] end
+function ZO_Anchor:SetOffsets(x, y) self.data[4] = x or self.data[4]; self.data[5] = y or self.data[5] end
+function ZO_Anchor:Set(control)
+	if control then control:ClearAnchors(); control:SetAnchor(self:Get()) end
+end
+
 -- ---- the gamepad chat ---------------------------------------------------------------
 -- Mirrors gamepadchatsystem.lua / sharedchatsystem.lua: the top-level control is built from the
 -- XML template (350 x 155, no anchor) and only placed by LoadSettings, which runs from the
@@ -220,8 +240,28 @@ chatControl.width, chatControl.height = 350, 155
 -- ZO_ChatWindowTopLevelTemplate: tier="MEDIUM" level="ZO_MEDIUM_TIER_KEYBOARD_CHAT_WINDOW"
 chatControl.drawTier, chatControl.drawLevel = DT_MEDIUM, 30
 chatControl.children = { Bg = MakeControl("ZO_GamepadTextChatBg", chatControl, "backdrop") }
+-- ZO_HUDManager_Element, as far as this add-on and PropagateSettings are concerned. The chat
+-- registers itself with CONFIG.defaultAnchor built from its own ANCHOR_SETTINGS.
+local chatElement = {
+	defaultAnchor = ZO_Anchor:New(BOTTOMRIGHT, nil, BOTTOMRIGHT, 0, -215),
+}
+chatElement.currentAnchor = chatElement.defaultAnchor
+function chatElement:IsUsingDefaultAnchor() return self.currentAnchor == self.defaultAnchor end
+
+-- ZO_HUDManager:PropagateSettings -> RevertOffsetModifications. On console GetSavedAnchor
+-- returns the default anchor, so this is always defaultAnchor:Set(control).
+HUD_MANAGER = {}
+function HUD_MANAGER:PropagateSettings()
+	local element = GAMEPAD_CHAT_SYSTEM.hudElement
+	if element then
+		element.currentAnchor = element.defaultAnchor
+		element.defaultAnchor:Set(element == chatElement and chatControl or nil)
+	end
+end
+
 GAMEPAD_CHAT_SYSTEM = {
 	control = chatControl,
+	hudElement = chatElement,
 	loaded = false,
 	-- UI_SETTING_GAMEPAD_CHAT_HUD_ENABLED: the player's own "show chat on the HUD" setting.
 	hudEnabled = true,
@@ -303,6 +343,15 @@ function CloseMenu()
 end
 
 function ChatWindowShown() return not chat.control:IsHidden() end
+function ChatElement() return chat.hudElement end
+function ChatElementAnchor()
+	local point, _, _, x, y = chat.hudElement.defaultAnchor:Get()
+	return string.format("%d:%d,%d", point, x, y)
+end
+-- Whatever it is that U51 does to the window after a zone load, seen from the outside.
+function BreakTheWindow() chatControl:SetDimensions(490, 280) end
+function RemoveHudElement() chat.hudElement = nil end
+function RestoreHudElement() chat.hudElement = chatElement end
 
 -- ZO_MinimizeChatFragment, which every menu scene carries.
 local wasChatMaximized = false

@@ -36,7 +36,7 @@ local GAME_FONT_20 = CHAT_FACE .. "|$(GP_20)|soft-shadow-thick"
 print("\n== 1. load ==")
 Fire(EVENT_ADD_ON_LOADED, "PBsChatWindowCustomizer")
 local addon = PBS_CHAT_WINDOW_CUSTOMIZER
-check("version read from manifest", addon.version, "1.2.0")
+check("version read from manifest", addon.version, "1.3.0")
 check("slash command registered", type(SLASH_COMMANDS["/pbchatwin"]), "function")
 check("short slash command registered", type(SLASH_COMMANDS["/pbcw"]), "function")
 check("HUD fragment callback registered", addon.hudRegistered, true)
@@ -374,6 +374,53 @@ CloseMenu()
 check("and the HUD shows it", ChatWindowShown(), true)
 AdvanceFrame(25000); ChatTick()
 check("and it minimises as the game would", ChatMessagesShown(), false)
+
+print("\n== 17c. Update 51: the customizable HUD element ==")
+Row(GetString(SI_PBSCWC_IN_MENUS)).setFunction(false)
+Row(GetString(SI_PBSCWC_ALWAYS_VISIBLE)).setFunction(false)
+SLASH_COMMANDS["/pbcw"]("reset")
+check("the element's own anchor is the game's", ChatElementAnchor(), "12:0,-215")
+SLASH_COMMANDS["/pbcw"]("size 900 500")
+SLASH_COMMANDS["/pbcw"]("pos 40 300")
+check("the control", Anchor() .. " " .. Dims(), "12:-40,-300 900x500")
+check("and the element agrees", ChatElementAnchor(), "12:-40,-300")
+check("still counts as the element's default, so the trackers follow", ChatElement():IsUsingDefaultAnchor(), true)
+
+-- What U51 does by itself: PropagateSettings on a screen resize, a gamepad-mode change, or once
+-- when add-ons have loaded. Before 1.3.0 this put the window back to the game's placement.
+HUD_MANAGER:PropagateSettings()
+check("the client's own re-apply keeps our position", Anchor(), "12:-40,-300")
+
+-- A zone load: something writes over the window after EVENT_PLAYER_ACTIVATED has been handled.
+BreakTheWindow()
+check("the window is wrong", Dims(), "490x280")
+Fire(EVENT_PLAYER_ACTIVATED)
+BreakTheWindow() -- after our own handler, which is what the PS5 report describes
+FlushCallLater()
+check("a scheduled look puts the size back", Dims(), "900x500")
+check("and the position with it", Anchor(), "12:-40,-300")
+check("the drift is recorded for status", live.driftLog ~= nil and #live.driftLog > 0, true)
+
+-- A screen resize is where the client's PropagateSettings runs.
+chat.control:SetDimensions(490, 280)
+Fire(EVENT_SCREEN_RESIZED, 1920, 1080)
+FlushCallLater()
+check("a resize is settled too", Dims(), "900x500")
+
+SLASH_COMMANDS["/pbcw"]("reset")
+check("reset puts the element's anchor back as well", ChatElementAnchor(), "12:0,-215")
+HUD_MANAGER:PropagateSettings()
+check("so the client's re-apply is the game's own again", Anchor(), "12:0,-215")
+check("and the window is the game's size", Dims(), "490x280")
+
+-- A client from before Update 51 has no element at all.
+RemoveHudElement()
+SLASH_COMMANDS["/pbcw"]("size 700 320")
+check("without an element the control is still written", Dims(), "700x320")
+check("and status says there is none", live:HudElement(), nil)
+SLASH_COMMANDS["/pbcw"]("reset")
+RestoreHudElement()
+SLASH_COMMANDS["/pbcw"]("status")
 
 print("\n== 18. a saved layout is applied at login, after the game's is read ==")
 local store = SavedStore.PBsChatWindowCustomizer_Data
